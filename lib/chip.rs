@@ -1,4 +1,6 @@
-use std::{collections::HashMap, fs::File, io::Read, panic::panic_any};
+use std::{collections::HashMap, fs::File, io::Read, panic::panic_any, time::Duration};
+
+use sdl2::{event::Event, keyboard::Keycode, pixels::Color};
 
 use crate::display;
 
@@ -30,7 +32,6 @@ fn initialize_registers() -> HashMap<u8, u8> {
     hm
 }
 
-#[derive(Debug)]
 pub struct Chip {
     // Only 12 bits are used in program_counter and index_register
     program_counter: u16,
@@ -161,7 +162,7 @@ impl Chip {
                 }
             }
         }
-        self.screen.display_terminal();
+        // self.screen.display_terminal();
     }
 
     pub fn instruction(&mut self) {
@@ -191,8 +192,28 @@ impl Chip {
     }
 
     pub fn interpret(&mut self) {
-        loop {
+        'running: loop {
+            self.screen.canvas.set_draw_color(Color::BLACK);
+            self.screen.canvas.clear();
+
+            self.screen.canvas.set_draw_color(Color::WHITE);
+            self.screen.canvas.fill_rects(&self.screen.create_white_rects()).expect("error printing the squares");
+
+            for event in self.screen.event_pump.poll_iter() {
+                match event {
+                    Event::Quit {..} |
+                    Event::KeyDown { keycode: Some(Keycode::Escape), .. } => {
+                        break 'running
+                    },
+                    _ => {}
+                }
+            }
+            // The rest of the game loop goes here...
+            
             self.instruction();
+    
+            self.screen.canvas.present();
+            // ::std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 60));
         }
     }
 }
