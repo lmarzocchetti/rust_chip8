@@ -117,11 +117,45 @@ impl Chip {
     }
 
     // opcode: 00EE
-    fn subroutine_return(&mut self) {}
+    fn subroutine_return(&mut self) {
+        self.program_counter = self.stack.pop();
+    }
 
     // opcode: 1NNN
     fn jump(&mut self, nnn: u16) {
         self.program_counter = nnn;
+    }
+
+    // opcode: 2NNN
+    fn subroutine_call(&mut self, nnn: u16) {
+        self.stack.push(self.program_counter);
+        self.program_counter = nnn;
+    }
+
+    // opcode: 3XNN
+    fn skip_equal_unary(&mut self, second_nibble: u8, nn: u8) {
+        let reg_val = self.registers.get(&second_nibble).unwrap();
+        if *reg_val == nn {
+            self.program_counter += 2;
+        }
+    }
+
+    // opcode: 4XNN
+    fn skip_not_equal_unary(&mut self, second_nibble: u8, nn: u8) {
+        let reg_val = self.registers.get(&second_nibble).unwrap();
+        if *reg_val != nn {
+            self.program_counter += 2;
+        }
+    }
+
+    // opcode: 5XY0
+    fn skip_equal_binary(&mut self, second_nibble: u8, third_nibble: u8) {
+        let x = self.registers.get(&second_nibble).unwrap();
+        let y = self.registers.get(&third_nibble).unwrap();
+
+        if x == y {
+            self.program_counter += 2;
+        }
     }
 
     // opcode: 6XNN
@@ -134,6 +168,16 @@ impl Chip {
     fn add(&mut self, second_nibble: u8, third_nibble: u8, fourth_nibble: u8) {
         let val: u8 = (third_nibble << 4) | fourth_nibble;
         *self.registers.get_mut(&second_nibble).unwrap() += val;
+    }
+
+    // opcode: 9XY0
+    fn skip_not_equal_binary(&mut self, second_nibble: u8, third_nibble: u8) {
+        let x = self.registers.get(&second_nibble).unwrap();
+        let y = self.registers.get(&third_nibble).unwrap();
+
+        if x != y {
+            self.program_counter += 2;
+        }
     }
 
     // opcode: ANNN
@@ -174,6 +218,7 @@ impl Chip {
         let third_nibble: u8 = ((istr >> 4) & 0x000F) as u8;
         let fourth_nibble: u8 = (istr & 0x000F) as u8;
 
+        let nn: u8 = (third_nibble << 4) | fourth_nibble;
         let nnn: u16 = istr & 0x0FFF;
 
         match first_nibble {
@@ -183,8 +228,13 @@ impl Chip {
                 _ => panic_any(format!("Error: Instruction {:#06x} do not exists!", istr)),
             },
             0x1 => self.jump(nnn),
+            0x2 => self.subroutine_call(nnn),
+            0x3 => self.skip_equal_unary(second_nibble, nn),
+            0x4 => self.skip_not_equal_unary(second_nibble, nn),
+            0x5 => self.skip_equal_binary(second_nibble, third_nibble),
             0x6 => self.set(second_nibble, third_nibble, fourth_nibble),
             0x7 => self.add(second_nibble, third_nibble, fourth_nibble),
+            0x9 => self.skip_not_equal_binary(second_nibble, third_nibble),
             0xA => self.set_index(second_nibble, third_nibble, fourth_nibble),
             0xD => self.display(second_nibble, third_nibble, fourth_nibble),
             _ => (),
