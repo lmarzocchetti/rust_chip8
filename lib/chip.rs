@@ -1,13 +1,21 @@
-use std::{collections::HashMap, fs::File, io::Read, panic::panic_any, time::Duration};
+use std::{collections::HashMap, fs::File, io::Read, panic::panic_any, process::exit, time::Duration};
 
+use rand::Rng;
 use sdl2::{event::Event, keyboard::Keycode, pixels::Color};
 
 use crate::display;
 
 mod stack;
 
+enum InstrVersion {
+    Old,
+    New,
+}
+
 const RAM_SIZE: usize = 4096;
 const PROGRAM_START: u16 = 512;
+
+const OP_8XY6_VERSION: InstrVersion = InstrVersion::New;
 
 fn initialize_registers() -> HashMap<u8, u8> {
     let mut hm: HashMap<u8, u8> = HashMap::new();
@@ -32,21 +40,25 @@ fn initialize_registers() -> HashMap<u8, u8> {
     hm
 }
 
+#[derive(Debug, PartialEq)]
+enum MetaInputs {
+    PressedInput,
+    Pass,
+}
+
 pub struct Chip {
     // Only 12 bits are used in program_counter and index_register
     program_counter: u16,
     index_register: u16,
     registers: HashMap<u8, u8>,
-
     memory: [u8; RAM_SIZE],
     // stack of addresses of 12 bits, represented as 16 bits
-    #[allow(dead_code)]
     stack: stack::Stack<u16>,
-    #[allow(dead_code)]
     delay_timer: u8,
-    #[allow(dead_code)]
+    num_instructions: u32,
     sound_timer: u8,
     screen: display::Display,
+    key_pressed: Option<u8>,
 }
 
 fn initialize_font() -> [u8; 4096] {
@@ -82,9 +94,11 @@ impl Chip {
             registers: initialize_registers(),
             memory: initialize_font(),
             stack: stack::Stack::new(),
-            delay_timer: 60,
-            sound_timer: 60,
+            delay_timer: 0,
+            num_instructions: 0,
+            sound_timer: 0,
             screen: display::Display::new(),
+            key_pressed: None,
         }
     }
 
@@ -159,15 +173,145 @@ impl Chip {
     }
 
     // opcode: 6XNN
-    fn set(&mut self, second_nibble: u8, third_nibble: u8, fourth_nibble: u8) {
-        let val: u8 = (third_nibble << 4) | fourth_nibble;
-        *self.registers.get_mut(&second_nibble).unwrap() = val;
+    fn set_value(&mut self, second_nibble: u8, nn: u8) {
+        *self.registers.get_mut(&second_nibble).unwrap() = nn;
     }
 
     // opcode: 7XNN
-    fn add(&mut self, second_nibble: u8, third_nibble: u8, fourth_nibble: u8) {
-        let val: u8 = (third_nibble << 4) | fourth_nibble;
-        *self.registers.get_mut(&second_nibble).unwrap() += val;
+    fn add_noncarry(&mut self, second_nibble: u8, nn: u8) {
+        let vx = *self.registers.get(&second_nibble).unwrap() as u16;
+        let val = nn as u16;
+        let result = vx + val;
+        *self.registers.get_mut(&second_nibble).unwrap() = result as u8;
+    }
+
+    // opcode: 8XY0
+    fn set_registers(&mut self, second_nibble: u8, third_nibble: u8) {
+        *self.registers.get_mut(&second_nibble).unwrap() =
+            *self.registers.get(&third_nibble).unwrap();
+    }
+
+    // opcode: 8XY1
+    fn binary_or(&mut self, second_nibble: u8, third_nibble: u8) {
+        *self.registers.get_mut(&second_nibble).unwrap() =
+            *self.registers.get(&second_nibble).unwrap()
+                | *self.registers.get(&third_nibble).unwrap();
+    }
+
+    // opcode: 8XY2
+    fn binary_and(&mut self, second_nibble: u8, third_nibble: u8) {
+        *self.registers.get_mut(&second_nibble).unwrap() =
+            *self.registers.get(&second_nibble).unwrap()
+                & *self.registers.get(&third_nibble).unwrap();
+    }
+
+    // opcode: 8XY3
+    fn logical_xor(&mut self, second_nibble: u8, third_nibble: u8) {
+        *self.registers.get_mut(&second_nibble).unwrap() =
+            *self.registers.get(&second_nibble).unwrap()
+                ^ *self.registers.get(&third_nibble).unwrap();
+    }
+
+    // opcode: 8XY4
+    fn add_carry(&mut self, second_nibble: u8, third_nibble: u8) {
+        let operation_res: u16 = *self.registers.get(&second_nibble).unwrap() as u16
+            + *self.registers.get(&third_nibble).unwrap() as u16;
+
+        *self.registers.get_mut(&second_nibble).unwrap() = operation_res as u8;
+
+        *self.registers.get_mut(&0x0F).unwrap() = if operation_res > 0xFF { 1 } else { 0 };
+    }
+
+    // opcode: 8XY5
+    fn subtract_vx(&mut self, second_nibble: u8, third_nibble: u8) {
+        let minuend = *self.registers.get(&second_nibble).unwrap();
+        let subtrahend = *self.registers.get(&third_nibble).unwrap();
+
+        *self.registers.get_mut(&0x0F).unwrap() = if minuend > subtrahend { 1 } else { 0 };
+
+        *self.registers.get_mut(&second_nibble).unwrap() = minuend.wrapping_sub(subtrahend);
+
+        /*if minuend >= subtrahend {
+            *self.registers.get_mut(&second_nibble).unwrap() = minuend - subtrahend;
+            *self.registers.get_mut(&0xF).unwrap() = 1;
+        } else {
+            *self.registers.get_mut(&second_nibble).unwrap() = 255 - (subtrahend - minuend);
+            *self.registers.get_mut(&0xF).unwrap() = 0;
+        }*/
+    }
+
+    // TODO: Far configurare dall'utente se non
+    //       vuole questa config: "Set VX to the value of VY"
+
+    // opcode: 8XY6
+    fn shift_right(&mut self, second_nibble: u8, third_nibble: u8) {
+        match OP_8XY6_VERSION {
+            InstrVersion::Old => {
+                *self.registers.get_mut(&second_nibble).unwrap() =
+                    *self.registers.get(&third_nibble).unwrap();
+
+                let shifted_value = *self.registers.get(&second_nibble).unwrap() & 0b00000001;
+                *self.registers.get_mut(&second_nibble).unwrap() =
+                    *self.registers.get(&second_nibble).unwrap() >> 1;
+
+                if shifted_value == 1 {
+                    *self.registers.get_mut(&0xF).unwrap() = 1;
+                } else {
+                    *self.registers.get_mut(&0xF).unwrap() = 0;
+                }
+            }
+            InstrVersion::New => {
+                *self.registers.get_mut(&0x0F).unwrap() =
+                    *self.registers.get(&second_nibble).unwrap() & 1;
+
+                *self.registers.get_mut(&second_nibble).unwrap() >>= 1;
+            }
+        }
+    }
+
+    // opcode: 8XYE
+    fn shift_left(&mut self, second_nibble: u8, third_nibble: u8) {
+        match OP_8XY6_VERSION {
+            InstrVersion::Old => {
+                *self.registers.get_mut(&second_nibble).unwrap() =
+                    *self.registers.get(&third_nibble).unwrap();
+
+                let shifted_value =
+                    (*self.registers.get(&second_nibble).unwrap() & 0b10000000) >> 7;
+                *self.registers.get_mut(&second_nibble).unwrap() =
+                    *self.registers.get(&second_nibble).unwrap() << 1;
+
+                if shifted_value == 1 {
+                    *self.registers.get_mut(&0xF).unwrap() = 1;
+                } else {
+                    *self.registers.get_mut(&0xF).unwrap() = 0;
+                }
+            }
+            InstrVersion::New => {
+                *self.registers.get_mut(&0x0F).unwrap() =
+                    (*self.registers.get(&second_nibble).unwrap() & 0b10000000) >> 7;
+
+                *self.registers.get_mut(&second_nibble).unwrap() <<= 1;
+            }
+        }
+    }
+
+    // opcode: 8XY7
+    fn subtract_vy(&mut self, second_nibble: u8, third_nibble: u8) {
+        let subtrahend = *self.registers.get(&second_nibble).unwrap();
+        let minuend = *self.registers.get(&third_nibble).unwrap();
+
+        *self.registers.get_mut(&0x0F).unwrap() = if minuend > subtrahend { 1 } else { 0 };
+
+        *self.registers.get_mut(&second_nibble).unwrap() = minuend.wrapping_sub(subtrahend);
+
+        /*if minuend >= subtrahend {
+            *self.registers.get_mut(&second_nibble).unwrap() = minuend - subtrahend;
+            *self.registers.get_mut(&0xF).unwrap() = 1;
+        } else {
+            *self.registers.get_mut(&second_nibble).unwrap() = 255 - (subtrahend - minuend);
+            *self.registers.get_mut(&0xF).unwrap() = 0;
+        }*/
     }
 
     // opcode: 9XY0
@@ -181,11 +325,22 @@ impl Chip {
     }
 
     // opcode: ANNN
-    fn set_index(&mut self, second_nibble: u8, third_nibble: u8, fourth_nibble: u8) {
-        let mut val: u16 = second_nibble as u16;
-        val = (val << 4) | third_nibble as u16;
-        val = (val << 4) | fourth_nibble as u16;
-        self.index_register = val;
+    fn set_index(&mut self, nnn: u16) {
+        self.index_register = nnn;
+    }
+
+    // TODO: Implemented the classic behaviour: make this configurable
+    //       to work as BXNN -> jump to the address XNN + register VX
+
+    // opcode: BNNN
+    fn jump_with_offset(&mut self, nnn: u16) {
+        self.program_counter = nnn + *self.registers.get(&0x0).unwrap() as u16;
+    }
+
+    // opcode: CXNN
+    fn random(&mut self, second_nibble: u8, nn: u8) {
+        let random: u8 = rand::thread_rng().gen();
+        *self.registers.get_mut(&second_nibble).unwrap() = random & nn;
     }
 
     // opcode: DXYN
@@ -206,7 +361,101 @@ impl Chip {
                 }
             }
         }
-        // self.screen.display_terminal();
+        self.screen.redraw = true;
+    }
+
+    // opcode: EX9E
+    fn skip_if_key_pressed(&mut self, second_nibble: u8) {
+        let key = *self.registers.get(&second_nibble).unwrap() & 0x0F;
+
+        match self.key_pressed {
+            Some(a) => {
+                if key == a {
+                    self.program_counter += 2;
+                }
+            }
+            None => {}
+        }
+    }
+
+    // opcode: EXA1
+    fn skip_if_key_not_pressed(&mut self, second_nibble: u8) {
+        let key = *self.registers.get(&second_nibble).unwrap() & 0x0F;
+
+        match self.key_pressed {
+            Some(a) => {
+                if key != a {
+                    self.program_counter += 2;
+                }
+            }
+            None => {}
+        }
+    }
+
+    // opcode: FX07
+    fn set_reg_to_delay(&mut self, second_nibble: u8) {
+        *self.registers.get_mut(&second_nibble).unwrap() = self.delay_timer;
+    }
+
+    // opcode: FX0A
+    fn get_key(&mut self, second_nibble: u8) {
+        loop {
+            _ = self.poll_inputs();
+            if self.key_pressed.is_some() {
+                *self.registers.get_mut(&second_nibble).unwrap() = self.key_pressed.unwrap();
+            }
+        }
+    }
+
+    // opcode: FX15
+    fn set_delay_to_reg(&mut self, second_nibble: u8) {
+        // self.delay_timer = *self.registers.get(&second_nibble).unwrap();
+
+        // self.delay_time = Utc::now().time();
+
+        self.delay_timer = *self.registers.get(&second_nibble).unwrap();
+    }
+
+    // opcode: FX18
+    fn set_sound_to_vx(&mut self, second_nibble: u8) {
+        self.sound_timer = *self.registers.get(&second_nibble).unwrap();
+    }
+
+    // opcode: FX1E
+    fn add_to_index(&mut self, second_nibble: u8) {
+        self.index_register += *self.registers.get(&second_nibble).unwrap() as u16;
+        *self.registers.get_mut(&0x0F).unwrap() = if self.index_register > 0x0F00 { 1 } else { 0 };
+    }
+
+    // opcode: FX29
+    fn font_character(&mut self, second_nibble: u8) {
+        self.index_register = (*self.registers.get(&second_nibble).unwrap() & 0x0F) as u16 * 5;
+    }
+
+    // opcode: FX33
+    fn binary_coded_dec_conv(&mut self, second_nibble: u8) {
+        let num = *self.registers.get(&second_nibble).unwrap();
+        self.memory[self.index_register as usize + 2] = num % 10;
+        self.memory[self.index_register as usize + 1] = (num % 100) / 10;
+        self.memory[self.index_register as usize] = num / 100;
+    }
+
+    // TODO: Implement the user choice for old behaviour of this instruction
+
+    // opcode: FX55
+    fn store_memory(&mut self, second_nibble: u8) {
+        for reg in 0..=second_nibble {
+            self.memory[(self.index_register + reg as u16) as usize] =
+                *self.registers.get(&reg).unwrap();
+        }
+    }
+
+    // opcode: FX65
+    fn load_memory(&mut self, second_nibble: u8) {
+        for reg in 0..=second_nibble {
+            *self.registers.get_mut(&reg).unwrap() =
+                self.memory[(self.index_register + reg as u16) as usize];
+        }
     }
 
     pub fn instruction(&mut self) {
@@ -218,52 +467,198 @@ impl Chip {
         let third_nibble: u8 = ((istr >> 4) & 0x000F) as u8;
         let fourth_nibble: u8 = (istr & 0x000F) as u8;
 
-        let nn: u8 = (third_nibble << 4) | fourth_nibble;
+        let nn: u8 = (istr & 0x00FF) as u8;
         let nnn: u16 = istr & 0x0FFF;
 
         match first_nibble {
-            0x0 => match fourth_nibble {
-                0x0 => self.clear_screen(),
-                0xE => self.subroutine_return(),
-                _ => panic_any(format!("Error: Instruction {:#06x} do not exists!", istr)),
+            0x0 => {
+                match second_nibble {
+                    0x0 => match third_nibble {
+                        0xE => {
+                            match fourth_nibble {
+                                0x0 => self.clear_screen(),
+                                0xE => self.subroutine_return(),
+                                _ => panic_any(format!("Error: Instruction {:#06x} do not exists!", istr)),
+                            }
+                        },
+                        _ => panic_any(format!("Error: Instruction {:#06x} do not exists!", istr)),
+                    },
+                    _ => panic_any(format!("Error: Instruction {:#06x} do not exists!", istr)),
+                }
             },
             0x1 => self.jump(nnn),
             0x2 => self.subroutine_call(nnn),
             0x3 => self.skip_equal_unary(second_nibble, nn),
             0x4 => self.skip_not_equal_unary(second_nibble, nn),
             0x5 => self.skip_equal_binary(second_nibble, third_nibble),
-            0x6 => self.set(second_nibble, third_nibble, fourth_nibble),
-            0x7 => self.add(second_nibble, third_nibble, fourth_nibble),
+            0x6 => self.set_value(second_nibble, nn),
+            0x7 => self.add_noncarry(second_nibble, nn),
+            0x8 => match fourth_nibble {
+                0x0 => self.set_registers(second_nibble, third_nibble),
+                0x1 => self.binary_or(second_nibble, third_nibble),
+                0x2 => self.binary_and(second_nibble, third_nibble),
+                0x3 => self.logical_xor(second_nibble, third_nibble),
+                0x4 => self.add_carry(second_nibble, third_nibble),
+                0x5 => self.subtract_vx(second_nibble, third_nibble),
+                0x6 => self.shift_right(second_nibble, third_nibble),
+                0x7 => self.subtract_vy(second_nibble, third_nibble),
+                0xE => self.shift_left(second_nibble, third_nibble),
+                _ => panic_any(format!("Error: Instruction {:#06x} do not exists!", istr)),
+            },
             0x9 => self.skip_not_equal_binary(second_nibble, third_nibble),
-            0xA => self.set_index(second_nibble, third_nibble, fourth_nibble),
+            0xA => self.set_index(nnn),
+            0xB => self.jump_with_offset(nnn),
+            0xC => self.random(second_nibble, nn),
             0xD => self.display(second_nibble, third_nibble, fourth_nibble),
-            _ => (),
+            0xE => match fourth_nibble {
+                0x1 => self.skip_if_key_not_pressed(second_nibble),
+                0xE => self.skip_if_key_pressed(second_nibble),
+                _ => panic_any(format!("Error: Instruction {:#06x} do not exists!", istr)),
+            },
+            0xF => match third_nibble {
+                0x0 => match fourth_nibble {
+                    0x7 => self.set_reg_to_delay(second_nibble),
+                    0xA => self.get_key(second_nibble),
+                    _ => panic_any(format!("Error: Instruction {:#06x} do not exists!", istr)),
+                },
+                0x1 => match fourth_nibble {
+                    0x5 => self.set_delay_to_reg(second_nibble),
+                    0x8 => self.set_sound_to_vx(second_nibble),
+                    0xE => self.add_to_index(second_nibble),
+                    _ => panic_any(format!("Error: Instruction {:#06x} do not exists!", istr)),
+                },
+                0x2 => self.font_character(second_nibble),
+                0x3 => self.binary_coded_dec_conv(second_nibble),
+                0x5 => self.store_memory(second_nibble),
+                0x6 => self.load_memory(second_nibble),
+                _ => panic_any(format!("Error: Instruction {:#06x} do not exists!", istr)),
+            },
+            _ => panic_any(format!("Error: Instruction {:#06x} do not exists!", istr)),
         }
     }
 
-    pub fn interpret(&mut self) {
-        'running: loop {
-            self.screen.canvas.set_draw_color(Color::BLACK);
-            self.screen.canvas.clear();
+    fn poll_inputs(&mut self) -> MetaInputs {
+        // self.key_pressed = None;
 
-            self.screen.canvas.set_draw_color(Color::WHITE);
-            self.screen.canvas.fill_rects(&self.screen.create_white_rects()).expect("error printing the squares");
-
-            for event in self.screen.event_pump.poll_iter() {
-                match event {
-                    Event::Quit {..} |
-                    Event::KeyDown { keycode: Some(Keycode::Escape), .. } => {
-                        break 'running
-                    },
-                    _ => {}
+        for event in self.screen.event_pump.poll_iter() {
+            match event {
+                // Event::KeyUp { .. } => self.key_pressed = None,
+                Event::Quit { .. }
+                | Event::KeyDown {
+                    keycode: Some(Keycode::Escape),
+                    ..
+                } => {
+                    exit(0);
                 }
+                Event::KeyDown {
+                    keycode: Some(Keycode::Num1),
+                    ..
+                } => self.key_pressed = Some(0x1),
+                Event::KeyDown {
+                    keycode: Some(Keycode::Num2),
+                    ..
+                } => self.key_pressed = Some(0x2),
+                Event::KeyDown {
+                    keycode: Some(Keycode::Num3),
+                    ..
+                } => self.key_pressed = Some(0x3),
+                Event::KeyDown {
+                    keycode: Some(Keycode::Num4),
+                    ..
+                } => self.key_pressed = Some(0xC),
+                Event::KeyDown {
+                    keycode: Some(Keycode::Q),
+                    ..
+                } => self.key_pressed = Some(0x4),
+                Event::KeyDown {
+                    keycode: Some(Keycode::W),
+                    ..
+                } => self.key_pressed = Some(0x5),
+                Event::KeyDown {
+                    keycode: Some(Keycode::E),
+                    ..
+                } => self.key_pressed = Some(0x6),
+                Event::KeyDown {
+                    keycode: Some(Keycode::R),
+                    ..
+                } => self.key_pressed = Some(0xD),
+                Event::KeyDown {
+                    keycode: Some(Keycode::A),
+                    ..
+                } => self.key_pressed = Some(0x7),
+                Event::KeyDown {
+                    keycode: Some(Keycode::S),
+                    ..
+                } => self.key_pressed = Some(0x8),
+                Event::KeyDown {
+                    keycode: Some(Keycode::D),
+                    ..
+                } => self.key_pressed = Some(0x9),
+                Event::KeyDown {
+                    keycode: Some(Keycode::F),
+                    ..
+                } => self.key_pressed = Some(0xE),
+                Event::KeyDown {
+                    keycode: Some(Keycode::Z),
+                    ..
+                } => self.key_pressed = Some(0xA),
+                Event::KeyDown {
+                    keycode: Some(Keycode::X),
+                    ..
+                } => self.key_pressed = Some(0x0),
+                Event::KeyDown {
+                    keycode: Some(Keycode::C),
+                    ..
+                } => self.key_pressed = Some(0xB),
+                Event::KeyDown {
+                    keycode: Some(Keycode::V),
+                    ..
+                } => self.key_pressed = Some(0xF),
+                Event::KeyUp { .. } => {
+                    self.key_pressed = None;
+                }
+                _ => return MetaInputs::Pass, //self.key_pressed = None,
             }
-            // The rest of the game loop goes here...
-            
+            return MetaInputs::PressedInput;
+        }
+
+        return MetaInputs::Pass;
+    }
+
+    pub fn interpret(&mut self) {
+        loop {
+            if self.screen.redraw {
+                self.screen.redraw = false;
+                self.screen.canvas.set_draw_color(Color::BLACK);
+                self.screen.canvas.clear();
+
+                self.screen.canvas.set_draw_color(Color::WHITE);
+                self.screen
+                    .canvas
+                    .fill_rects(&self.screen.create_white_rects())
+                    .expect("error printing the squares");
+
+                self.screen.canvas.present();
+            }
+
+            _ = self.poll_inputs();
+
+            if self.num_instructions == 12 {
+                if self.delay_timer > 0 {
+                    self.delay_timer -= 1;
+                }
+                self.num_instructions = 0;
+            }
+
+            if self.sound_timer > 0 {
+                self.sound_timer -= 1;
+            }
+
             self.instruction();
-    
-            self.screen.canvas.present();
-            // ::std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 60));
+            self.num_instructions += 1;
+
+            // self.screen.canvas.present();
+            ::std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 720));
         }
     }
 }

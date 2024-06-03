@@ -7,7 +7,7 @@ use sdl2::{EventPump, Sdl, VideoSubsystem};
 pub const WIDTH: usize = 64;
 pub const HEIGHT: usize = 32;
 
-pub const PIX_SIZE: usize = 10;
+pub const PIX_SIZE: usize = 20;
 
 pub struct Display {
     data: [[bool; HEIGHT]; WIDTH],
@@ -16,6 +16,7 @@ pub struct Display {
     // window: Window,
     pub canvas: Canvas<Window>,
     pub event_pump: EventPump,
+    pub redraw: bool,
 }
 
 impl Default for Display {
@@ -56,6 +57,7 @@ impl Display {
             //window: window,
             canvas: canvas,
             event_pump: event_pump,
+            redraw: true
         }
     }
 
@@ -78,7 +80,7 @@ impl Display {
             for j in 0..WIDTH {
                 if self.get_pixel(j, i) == true {
                     // TODO: Attenzione (j * PIX_SIZE - 1) potrebbe essere
-                    rects.push(Rect::new((j * PIX_SIZE ) as i32, (i * PIX_SIZE) as i32, PIX_SIZE as u32, PIX_SIZE as u32));
+                    rects.push(Rect::new((j * PIX_SIZE  - 1) as i32, (i * PIX_SIZE) as i32, PIX_SIZE as u32, PIX_SIZE as u32));
                 }
             }
         }
