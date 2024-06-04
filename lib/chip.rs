@@ -181,7 +181,8 @@ impl Chip {
 
     // opcode: 7XNN
     fn add_noncarry(&mut self, second_nibble: u8, nn: u8) {
-        *self.registers.get_mut(&second_nibble).unwrap() = self.registers.get(&second_nibble).unwrap().wrapping_add(nn);
+        *self.registers.get_mut(&second_nibble).unwrap() =
+            self.registers.get(&second_nibble).unwrap().wrapping_add(nn);
     }
 
     // opcode: 8XY0
