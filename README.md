@@ -13,12 +13,19 @@ $ cargo run --release <path-to-rom>
 This Chip8 emulator is following strictly the original Cosmac VIP specification, so no support for SuperCHIP.
 
 #### Keyboard
-Uses the classical keyboard layout for emulation so:
-| 1 | 2 | 3 | 4 |            | 1 | 2 | 3 | C |
-|---|---|---|---|            |---|---|---|---|
-| Q | W | E | R |            | 4 | 5 | 6 | D |
-| A | S | D | F |            | 7 | 8 | 9 | E |
-| Z | X | C | V |            | A | 0 | B | F |
+Uses the classical keyboard layout for emulation so these buttons of the original Cosmac VIP:
+| 1 | 2 | 3 | C |
+|---|---|---|---|
+| 4 | 5 | 6 | D |
+| 7 | 8 | 9 | E |
+| A | 0 | B | F |
+
+are mapped to:
+| 1 | 2 | 3 | 4 |
+|---|---|---|---|
+| Q | W | E | R |
+| A | S | D | F |
+| Z | X | C | V |
 
 #### Instruction/sec
 I have set to 720 instruction/sec so the delay timer can decrease by one every 12 instruction
