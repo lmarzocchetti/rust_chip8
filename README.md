@@ -15,6 +15,7 @@ This Chip8 emulator is following strictly the original Cosmac VIP specification,
 #### Keyboard
 Uses the classical keyboard layout for emulation so:
 | 1 | 2 | 3 | 4 |
+|---|---|---|---|
 | Q | W | E | R |
 | A | S | D | F |
 | Z | X | C | V |
