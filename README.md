@@ -9,6 +9,19 @@ src="https://github.com/lmarzocchetti/rust_chip8/assets/61746163/a9f3bfdf-dbb6-4
 $ cargo run --release <path-to-rom>
 ```
 
+### Informations
+This Chip8 emulator is following strictly the original Cosmac VIP specification, so no support for SuperCHIP.
+
+#### Keyboard
+Uses the classical keyboard layout for emulation so:
+1  2  3  4            1  2  3  C
+Q  W  E  R    ====    4  5  6  D
+A  S  D  F    ====    7  8  9  E
+Z  X  C  V            A  0  B  F
+
+#### Instruction/sec
+I have set to 720 instruction/sec so the delay timer can decrease by one every 12 instruction
+
 ### Images and Videos
 
 <img width="1279" alt="Screenshot 2024-06-04 at 16 15 54" src="https://github.com/lmarzocchetti/rust_chip8/assets/61746163/66b61af9-b02a-4288-90bc-412074824807">
