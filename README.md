@@ -14,10 +14,10 @@ This Chip8 emulator is following strictly the original Cosmac VIP specification,
 
 #### Keyboard
 Uses the classical keyboard layout for emulation so:
-1  2  3  4            1  2  3  C
-Q  W  E  R    ====    4  5  6  D
-A  S  D  F    ====    7  8  9  E
-Z  X  C  V            A  0  B  F
+| 1 | 2 | 3 | 4 |
+| Q | W | E | R |
+| A | S | D | F |
+| Z | X | C | V |
 
 #### Instruction/sec
 I have set to 720 instruction/sec so the delay timer can decrease by one every 12 instruction
