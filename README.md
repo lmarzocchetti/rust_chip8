@@ -10,3 +10,5 @@ $ cargo run --release <path-to-rom>
 ```
 
 ### Images
+
+![tetris-demo](https://github.com/lmarzocchetti/rust_chip8/assets/61746163/4c913988-9cc6-4857-93bc-9d113d3de70f)
