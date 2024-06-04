@@ -10,3 +10,7 @@ $ cargo run --release <path-to-rom>
 ```
 
 ### Images
+
+
+https://github.com/lmarzocchetti/rust_chip8/assets/61746163/cb914235-1a94-424d-9c23-d354ef64cfce
+
