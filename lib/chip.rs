@@ -1,4 +1,6 @@
-use std::{collections::HashMap, fs::File, io::Read, panic::panic_any, process::exit, time::Duration};
+use std::{
+    collections::HashMap, fs::File, io::Read, panic::panic_any, process::exit, time::Duration,
+};
 
 use rand::Rng;
 use sdl2::{event::Event, keyboard::Keycode, pixels::Color};
@@ -15,7 +17,7 @@ enum InstrVersion {
 const RAM_SIZE: usize = 4096;
 const PROGRAM_START: u16 = 512;
 
-const OP_8XY6_VERSION: InstrVersion = InstrVersion::New;
+const OP_8XY6_VERSION: InstrVersion = InstrVersion::Old;
 
 fn initialize_registers() -> HashMap<u8, u8> {
     let mut hm: HashMap<u8, u8> = HashMap::new();
@@ -148,16 +150,16 @@ impl Chip {
 
     // opcode: 3XNN
     fn skip_equal_unary(&mut self, second_nibble: u8, nn: u8) {
-        let reg_val = self.registers.get(&second_nibble).unwrap();
-        if *reg_val == nn {
+        let reg_val = *self.registers.get(&second_nibble).unwrap();
+        if reg_val == nn {
             self.program_counter += 2;
         }
     }
 
     // opcode: 4XNN
     fn skip_not_equal_unary(&mut self, second_nibble: u8, nn: u8) {
-        let reg_val = self.registers.get(&second_nibble).unwrap();
-        if *reg_val != nn {
+        let reg_val = *self.registers.get(&second_nibble).unwrap();
+        if reg_val != nn {
             self.program_counter += 2;
         }
     }
@@ -179,10 +181,7 @@ impl Chip {
 
     // opcode: 7XNN
     fn add_noncarry(&mut self, second_nibble: u8, nn: u8) {
-        let vx = *self.registers.get(&second_nibble).unwrap() as u16;
-        let val = nn as u16;
-        let result = vx + val;
-        *self.registers.get_mut(&second_nibble).unwrap() = result as u8;
+        *self.registers.get_mut(&second_nibble).unwrap() = self.registers.get(&second_nibble).unwrap().wrapping_add(nn);
     }
 
     // opcode: 8XY0
@@ -193,23 +192,20 @@ impl Chip {
 
     // opcode: 8XY1
     fn binary_or(&mut self, second_nibble: u8, third_nibble: u8) {
-        *self.registers.get_mut(&second_nibble).unwrap() =
-            *self.registers.get(&second_nibble).unwrap()
-                | *self.registers.get(&third_nibble).unwrap();
+        *self.registers.get_mut(&second_nibble).unwrap() |=
+            *self.registers.get(&third_nibble).unwrap();
     }
 
     // opcode: 8XY2
     fn binary_and(&mut self, second_nibble: u8, third_nibble: u8) {
-        *self.registers.get_mut(&second_nibble).unwrap() =
-            *self.registers.get(&second_nibble).unwrap()
-                & *self.registers.get(&third_nibble).unwrap();
+        *self.registers.get_mut(&second_nibble).unwrap() &=
+            *self.registers.get(&third_nibble).unwrap();
     }
 
     // opcode: 8XY3
     fn logical_xor(&mut self, second_nibble: u8, third_nibble: u8) {
-        *self.registers.get_mut(&second_nibble).unwrap() =
-            *self.registers.get(&second_nibble).unwrap()
-                ^ *self.registers.get(&third_nibble).unwrap();
+        *self.registers.get_mut(&second_nibble).unwrap() ^=
+            *self.registers.get(&third_nibble).unwrap();
     }
 
     // opcode: 8XY4
@@ -219,25 +215,20 @@ impl Chip {
 
         *self.registers.get_mut(&second_nibble).unwrap() = operation_res as u8;
 
-        *self.registers.get_mut(&0x0F).unwrap() = if operation_res > 0xFF { 1 } else { 0 };
+        *self.registers.get_mut(&0xF).unwrap() = if operation_res > 0xFF { 1 } else { 0 };
     }
 
     // opcode: 8XY5
     fn subtract_vx(&mut self, second_nibble: u8, third_nibble: u8) {
-        let minuend = *self.registers.get(&second_nibble).unwrap();
-        let subtrahend = *self.registers.get(&third_nibble).unwrap();
+        let (new_vx, borrow) = self
+            .registers
+            .get_mut(&second_nibble)
+            .unwrap()
+            .overflowing_sub(*self.registers.get(&third_nibble).unwrap());
+        let new_vf: u8 = if borrow { 0 } else { 1 };
 
-        *self.registers.get_mut(&0x0F).unwrap() = if minuend > subtrahend { 1 } else { 0 };
-
-        *self.registers.get_mut(&second_nibble).unwrap() = minuend.wrapping_sub(subtrahend);
-
-        /*if minuend >= subtrahend {
-            *self.registers.get_mut(&second_nibble).unwrap() = minuend - subtrahend;
-            *self.registers.get_mut(&0xF).unwrap() = 1;
-        } else {
-            *self.registers.get_mut(&second_nibble).unwrap() = 255 - (subtrahend - minuend);
-            *self.registers.get_mut(&0xF).unwrap() = 0;
-        }*/
+        *self.registers.get_mut(&second_nibble).unwrap() = new_vx;
+        *self.registers.get_mut(&0xF).unwrap() = new_vf;
     }
 
     // TODO: Far configurare dall'utente se non
@@ -261,7 +252,7 @@ impl Chip {
                 }
             }
             InstrVersion::New => {
-                *self.registers.get_mut(&0x0F).unwrap() =
+                *self.registers.get_mut(&0xF).unwrap() =
                     *self.registers.get(&second_nibble).unwrap() & 1;
 
                 *self.registers.get_mut(&second_nibble).unwrap() >>= 1;
@@ -288,7 +279,7 @@ impl Chip {
                 }
             }
             InstrVersion::New => {
-                *self.registers.get_mut(&0x0F).unwrap() =
+                *self.registers.get_mut(&0xF).unwrap() =
                     (*self.registers.get(&second_nibble).unwrap() & 0b10000000) >> 7;
 
                 *self.registers.get_mut(&second_nibble).unwrap() <<= 1;
@@ -298,20 +289,15 @@ impl Chip {
 
     // opcode: 8XY7
     fn subtract_vy(&mut self, second_nibble: u8, third_nibble: u8) {
-        let subtrahend = *self.registers.get(&second_nibble).unwrap();
-        let minuend = *self.registers.get(&third_nibble).unwrap();
+        let (new_vx, borrow) = self
+            .registers
+            .get_mut(&third_nibble)
+            .unwrap()
+            .overflowing_sub(*self.registers.get(&second_nibble).unwrap());
+        let new_vf: u8 = if borrow { 0 } else { 1 };
 
-        *self.registers.get_mut(&0x0F).unwrap() = if minuend > subtrahend { 1 } else { 0 };
-
-        *self.registers.get_mut(&second_nibble).unwrap() = minuend.wrapping_sub(subtrahend);
-
-        /*if minuend >= subtrahend {
-            *self.registers.get_mut(&second_nibble).unwrap() = minuend - subtrahend;
-            *self.registers.get_mut(&0xF).unwrap() = 1;
-        } else {
-            *self.registers.get_mut(&second_nibble).unwrap() = 255 - (subtrahend - minuend);
-            *self.registers.get_mut(&0xF).unwrap() = 0;
-        }*/
+        *self.registers.get_mut(&second_nibble).unwrap() = new_vx;
+        *self.registers.get_mut(&0xF).unwrap() = new_vf;
     }
 
     // opcode: 9XY0
@@ -345,28 +331,41 @@ impl Chip {
 
     // opcode: DXYN
     fn display(&mut self, second_nibble: u8, third_nibble: u8, fourth_nibble: u8) {
-        *self.registers.get_mut(&0xF).unwrap() = 0;
+        let x_coord = *self.registers.get(&second_nibble).unwrap();
+        let y_coord = *self.registers.get(&third_nibble).unwrap();
 
-        for byte in 0..fourth_nibble {
-            let y = (self.registers.get(&third_nibble).unwrap() + byte) % 32;
-            for bit in 0..8 {
-                let x = (self.registers.get(&second_nibble).unwrap() + bit) % 64;
-                let color =
-                    (self.memory[self.index_register as usize + byte as usize] >> (7 - bit)) & 1;
-                if color == 1 && self.screen.get_pixel(x as usize, y as usize) {
-                    self.screen.set_pixel(x as usize, y as usize, false);
-                    *self.registers.get_mut(&0xF).unwrap() = 1;
-                } else if color == 1 && !self.screen.get_pixel(x as usize, y as usize) {
-                    self.screen.set_pixel(x as usize, y as usize, true);
+        let num_rows = fourth_nibble;
+
+        let mut flipped = false;
+
+        for y_line in 0..num_rows {
+            let addr = self.index_register + y_line as u16;
+            let pixels = self.memory[addr as usize];
+
+            for x_line in 0..8 {
+                if (pixels & (0b1000_0000 >> x_line)) != 0 {
+                    let x = (x_coord as usize + x_line) % 64;
+                    let y = (y_coord as usize + y_line as usize) % 32;
+
+                    let idx = x + 64 * y;
+                    flipped |= self.screen.data[idx];
+                    self.screen.data[idx] ^= true;
                 }
             }
         }
+
+        if flipped {
+            *self.registers.get_mut(&0xF).unwrap() = 1;
+        } else {
+            *self.registers.get_mut(&0xF).unwrap() = 0;
+        }
+
         self.screen.redraw = true;
     }
 
     // opcode: EX9E
     fn skip_if_key_pressed(&mut self, second_nibble: u8) {
-        let key = *self.registers.get(&second_nibble).unwrap() & 0x0F;
+        let key = *self.registers.get(&second_nibble).unwrap();
 
         match self.key_pressed {
             Some(a) => {
@@ -380,7 +379,7 @@ impl Chip {
 
     // opcode: EXA1
     fn skip_if_key_not_pressed(&mut self, second_nibble: u8) {
-        let key = *self.registers.get(&second_nibble).unwrap() & 0x0F;
+        let key = *self.registers.get(&second_nibble).unwrap();
 
         match self.key_pressed {
             Some(a) => {
@@ -388,7 +387,9 @@ impl Chip {
                     self.program_counter += 2;
                 }
             }
-            None => {}
+            None => {
+                self.program_counter += 2;
+            }
         }
     }
 
@@ -403,16 +404,13 @@ impl Chip {
             _ = self.poll_inputs();
             if self.key_pressed.is_some() {
                 *self.registers.get_mut(&second_nibble).unwrap() = self.key_pressed.unwrap();
+                break;
             }
         }
     }
 
     // opcode: FX15
     fn set_delay_to_reg(&mut self, second_nibble: u8) {
-        // self.delay_timer = *self.registers.get(&second_nibble).unwrap();
-
-        // self.delay_time = Utc::now().time();
-
         self.delay_timer = *self.registers.get(&second_nibble).unwrap();
     }
 
@@ -424,12 +422,12 @@ impl Chip {
     // opcode: FX1E
     fn add_to_index(&mut self, second_nibble: u8) {
         self.index_register += *self.registers.get(&second_nibble).unwrap() as u16;
-        *self.registers.get_mut(&0x0F).unwrap() = if self.index_register > 0x0F00 { 1 } else { 0 };
+        *self.registers.get_mut(&0xF).unwrap() = if self.index_register > 0x0F00 { 1 } else { 0 };
     }
 
     // opcode: FX29
     fn font_character(&mut self, second_nibble: u8) {
-        self.index_register = (*self.registers.get(&second_nibble).unwrap() & 0x0F) as u16 * 5;
+        self.index_register = (*self.registers.get(&second_nibble).unwrap() & 0xF) as u16 * 5;
     }
 
     // opcode: FX33
@@ -448,6 +446,7 @@ impl Chip {
             self.memory[(self.index_register + reg as u16) as usize] =
                 *self.registers.get(&reg).unwrap();
         }
+        self.index_register += second_nibble as u16 + 1;
     }
 
     // opcode: FX65
@@ -456,6 +455,7 @@ impl Chip {
             *self.registers.get_mut(&reg).unwrap() =
                 self.memory[(self.index_register + reg as u16) as usize];
         }
+        self.index_register += second_nibble as u16 + 1;
     }
 
     pub fn instruction(&mut self) {
@@ -471,20 +471,16 @@ impl Chip {
         let nnn: u16 = istr & 0x0FFF;
 
         match first_nibble {
-            0x0 => {
-                match second_nibble {
-                    0x0 => match third_nibble {
-                        0xE => {
-                            match fourth_nibble {
-                                0x0 => self.clear_screen(),
-                                0xE => self.subroutine_return(),
-                                _ => panic_any(format!("Error: Instruction {:#06x} do not exists!", istr)),
-                            }
-                        },
+            0x0 => match second_nibble {
+                0x0 => match third_nibble {
+                    0xE => match fourth_nibble {
+                        0x0 => self.clear_screen(),
+                        0xE => self.subroutine_return(),
                         _ => panic_any(format!("Error: Instruction {:#06x} do not exists!", istr)),
                     },
                     _ => panic_any(format!("Error: Instruction {:#06x} do not exists!", istr)),
-                }
+                },
+                _ => panic_any(format!("Error: Instruction {:#06x} do not exists!", istr)),
             },
             0x1 => self.jump(nnn),
             0x2 => self.subroutine_call(nnn),
@@ -510,9 +506,12 @@ impl Chip {
             0xB => self.jump_with_offset(nnn),
             0xC => self.random(second_nibble, nn),
             0xD => self.display(second_nibble, third_nibble, fourth_nibble),
-            0xE => match fourth_nibble {
-                0x1 => self.skip_if_key_not_pressed(second_nibble),
-                0xE => self.skip_if_key_pressed(second_nibble),
+            0xE => match third_nibble {
+                0x9 | 0xA => match fourth_nibble {
+                    0x1 => self.skip_if_key_not_pressed(second_nibble),
+                    0xE => self.skip_if_key_pressed(second_nibble),
+                    _ => panic_any(format!("Error: Instruction {:#06x} do not exists!", istr)),
+                },
                 _ => panic_any(format!("Error: Instruction {:#06x} do not exists!", istr)),
             },
             0xF => match third_nibble {
@@ -538,11 +537,8 @@ impl Chip {
     }
 
     fn poll_inputs(&mut self) -> MetaInputs {
-        // self.key_pressed = None;
-
         for event in self.screen.event_pump.poll_iter() {
             match event {
-                // Event::KeyUp { .. } => self.key_pressed = None,
                 Event::Quit { .. }
                 | Event::KeyDown {
                     keycode: Some(Keycode::Escape),
@@ -617,7 +613,7 @@ impl Chip {
                 Event::KeyUp { .. } => {
                     self.key_pressed = None;
                 }
-                _ => return MetaInputs::Pass, //self.key_pressed = None,
+                _ => return MetaInputs::Pass,
             }
             return MetaInputs::PressedInput;
         }
