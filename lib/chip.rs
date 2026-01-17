@@ -326,7 +326,7 @@ impl Chip {
 
     // opcode: CXNN
     fn random(&mut self, second_nibble: u8, nn: u8) {
-        let random: u8 = rand::thread_rng().gen();
+        let random: u8 = rand::random();
         *self.registers.get_mut(&second_nibble).unwrap() = random & nn;
     }
 
